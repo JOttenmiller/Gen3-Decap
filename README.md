@@ -1,2 +1,4 @@
 # Gen3-Decap
-Decapitalization Patch for Gen1Recomp's gen 3 support.
+Currently support is only tested on FIRE RED but Emerald and the rest of gen3 should work.
+Woobledex is also supported! Will try adding more as time goes on.
+
