@@ -1,0 +1,21 @@
+{
+  "id": "decap_names",
+  "name": "Decapitalize Names",
+  "github": "JOttenmiller/Gen3-Decap",
+  "version": "0.1.0",
+  "api": 3,
+  "games": [
+    "frlg",
+    "rse"
+  ],
+  "entry": "main.lua",
+  "category": "OTHER",
+  "description": "Decapitalize names like ROM hacks!",
+  "priority": 100,
+  "optional_dependencies": [
+    "national_dex_gen3"
+  ],
+  "permissions": [
+    "engine_internals"
+  ]
+}
