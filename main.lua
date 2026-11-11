@@ -76,8 +76,7 @@ local function decapText(s, protected)
  if source:find("É") then source = source:gsub("É", "é") end
  local result = source:gsub("[%w'é]+", function(word)
  if word:find("%d") then return nil end
- -- an all-caps word followed by a lowercase ending ("MAY's", "OAK'll", "BALLs"): the head is
- -- title-cased and the ending kept as written. Acronyms (TMs, PCs) stay as they are.
+ 
  local head, tail = word:match("^([%u\195\169]+)('%l+)$")
  if not head then head, tail = word:match("^([%u\195\169][%u\195\169]+)(s)$") end
  if head and select(2, head:gsub("%u", "")) >= 2 then
@@ -198,10 +197,6 @@ return function(mod)
  end
  if rawget(T, "__decapText") then return end
 
-    -- FireRed/LeafGreen offer preset names on the naming screens (RED, FIRE, ASH, GARY, ...).
-    -- Those come from the ROM's own lists. A preset name is treated like any other ROM text and
-    -- title-cased; a name that is not on the lists was typed by the player and is protected.
-    -- (Typing a preset name by hand cannot be told apart from choosing it.)
     local presetNames
     local function isPreset(name)
       if type(name) ~= "string" or name == "" then return false end
@@ -231,8 +226,6 @@ return function(mod)
       return presetNames ~= nil and presetNames[name:upper()] == true
     end
 
-    -- In Ruby/Sapphire/Emerald the rival is a fixed character (BRENDAN / MAY), not a name the
-    -- player typed; in FireRed/LeafGreen the rival's name is typed and is protected.
     local function rivalIsFixed(ctx)
       local okD, d = pcall(T.dialect, type(ctx) == "table" and ctx.dialect or nil)
       return okD and type(d) == "table" and d.GENDERED_PH ~= nil and d.GENDERED_PH.RIVAL == true
@@ -273,9 +266,6 @@ return function(mod)
       return list, table.concat(list, "|")
     end
 
-    -- The engine builds plurals itself and appends capital letters to the item name it was
-    -- given ("Poké Ball" .. "S", "Cheri Berr" .. "IES"). Only those two known shapes are fixed,
-    -- so a typed nickname is never touched.
     local function fixPlural(value)
       if value:find("Ball S$") or value:find("[Bb]allS$") then return (value:gsub("S$", "s")) end
       if value:find("BerrIES$") then return (value:gsub("IES$", "ies")) end
@@ -295,7 +285,6 @@ return function(mod)
       local hit = cache[ir]
       if hit and hit.n == #ir and hit.plain then return ir end
 
-      -- cheap scan: capitals in literal text, or segments whose value changes per call
       local candidate, dynamic = false, false
       for i = 1, #ir do
         local seg = ir[i]
@@ -363,8 +352,7 @@ return function(mod)
  wrapped = wrapped + 1
  end
  end
- -- Some scenes (the Hoenn intro with Prof. Birch) print through their own printer, which
- -- expands one segment at a time with TextIR.expandSeg instead of the page functions above.
+
  local originalExpandSeg = T.expandSeg
  if type(originalExpandSeg) == "function" then
    T.expandSeg = function(seg, ctx)
