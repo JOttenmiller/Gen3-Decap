@@ -2,7 +2,7 @@
  "id": "decap_names",
  "name": "Decapitalize Names",
  "github": "JOttenmiller/Gen3-Decap",
- "version": "0.2.0",
+ "version": "0.2.1",
  "api": 3,
  "games": [
   "frlg",
