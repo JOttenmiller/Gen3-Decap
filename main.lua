@@ -173,14 +173,6 @@ return function(mod)
  local dialogueText = DIALOGUE and "dialogue: not hooked" or "dialogue: off"
  local dialogueSegs = 0
 
- local nicknames, nicknameCount = {}, 0
- local function noteNickname(nick)
- if type(nick) == "string" and #nick >= 2 and not nicknames[nick] then
- nicknames[nick] = true
- nicknameCount = nicknameCount + 1
- end
- end
-
  local function checkNameTagsSupport()
  local okNT, nameTags = pcall(function() return mod.find and mod.find("name_tags") or require("mods.name_tags.main") end)
  if okNT and nameTags then
@@ -189,6 +181,7 @@ return function(mod)
  end
 
  local labelDecap
+ local originMark
  local function textPass()
  if not DIALOGUE then return end
  local okT, T = pcall(require, "src.core.game3.scripting.text_ir")
@@ -230,44 +223,6 @@ return function(mod)
     local function rivalIsFixed(ctx)
       local okD, d = pcall(T.dialect, type(ctx) == "table" and ctx.dialect or nil)
       return okD and type(d) == "table" and d.GENDERED_PH ~= nil and d.GENDERED_PH.RIVAL == true
-    end
-
-    local function liveNicknames()
-      local found = {}
-      local Runtime = package.loaded["src.core.game3.runtime"]
-      local session = type(Runtime) == "table" and Runtime.session or nil
-      if type(session) ~= "table" then return found end
-      local Pk = package.loaded["src.core.game3.pokemon"]
-      local scanned = 0
-      local function consider(mon)
-        if type(mon) ~= "table" then return end
-        local nick = mon.nickname
-        if type(nick) ~= "string" or #nick < 2 then return end
-        if type(Pk) == "table" and type(Pk.speciesOf) == "function" and type(Pk.name) == "function" then
-          local okS, species = pcall(Pk.speciesOf, mon)
-          if okS and species then
-            local okN, default = pcall(Pk.name, species)
-            if okN and type(default) == "string" and default:upper() == nick:upper() then return end
-          end
-        end
-        found[nick] = true
-      end
-      local function walk(list)
-        if type(list) ~= "table" then return end
-        for _, mon in pairs(list) do
-          scanned = scanned + 1
-          if scanned > 1000 then return end
-          consider(mon)
-        end
-      end
-      walk(session.party)
-      local storage = session.storage
-      if type(storage) == "table" and type(storage.boxes) == "table" then
-        for _, box in pairs(storage.boxes) do
-          if type(box) == "table" then walk(box.mons) end
-        end
-      end
-      return found
     end
 
     local function livePlayerName()
@@ -316,21 +271,6 @@ return function(mod)
         local rivalValue = field("rivalName")
         if not isPreset(rivalValue) then add(rivalValue) end
       end
-      local vars = field("stringVars")
-      if type(vars) == "table" then
-        for _, v in pairs(vars) do add(v) end
-      end
-      local nickSet = {}
-      for nick in pairs(nicknames) do nickSet[nick] = true end
-      for nick in pairs(liveNicknames()) do nickSet[nick] = true end
-      for nick in pairs(nickSet) do
-        add(nick)
-        local upper = nick:upper()
-        if nick ~= upper and not nickSet[upper] and aliases[upper] == nil then
-          add(upper)
-          aliases[upper] = nick
-        end
-      end
       local list = {}
       for name in pairs(set) do list[#list + 1] = name end
       table.sort(list, function(x, y)
@@ -356,9 +296,12 @@ return function(mod)
       return nil
     end
 
+    local runtimeIR = setmetatable({}, { __mode = "k" })
+    local runtimeSeg = setmetatable({}, { __mode = "k" })
     local cache = setmetatable({}, { __mode = "k" })
     local function decapIR(ir, ctx)
       if type(ir) ~= "table" then return ir end
+      if runtimeIR[ir] then return ir end
       local hit = cache[ir]
       if hit and hit.n == #ir and hit.plain then return ir end
 
@@ -440,10 +383,28 @@ return function(mod)
  local originalExpandSeg = T.expandSeg
  if type(originalExpandSeg) == "function" then
    T.expandSeg = function(seg, ctx)
+     if runtimeSeg[seg] then return originalExpandSeg(seg, ctx) end
      local ir = decapIR({ seg }, ctx)
      return originalExpandSeg(ir[1], ctx)
    end
    wrapped = wrapped + 1
+ end
+
+ local originalFromAscii = T.fromAscii
+ originMark = function()
+ if rawget(T, "__decapOrigin") or type(originalFromAscii) ~= "function" then return end
+ T.fromAscii = function(...)
+ local ir = originalFromAscii(...)
+ if type(ir) == "table" then
+ runtimeIR[ir] = true
+ for i = 1, #ir do
+ local seg = ir[i]
+ if type(seg) == "table" then runtimeSeg[seg] = true end
+ end
+ end
+ return ir
+ end
+ rawset(T, "__decapOrigin", true)
  end
 
  labelDecap = function(label)
@@ -451,7 +412,7 @@ return function(mod)
  return decapText(label, list, aliases)
  end
  rawset(T, "__decapText", true)
- dialogueText = ("dialogue: %d functions hooked"):format(wrapped)
+ dialogueText = ("dialogue: %d functions hooked, origin mode"):format(wrapped)
  end
  pcall(textPass)
 
@@ -539,8 +500,6 @@ return function(mod)
  if type(speciesName) == "string" and speciesName:upper() == nick:upper() then
  return speciesName
  end
- noteNickname(nick)
- if result ~= nick then noteNickname(result) end
  return result
  end
  end
@@ -625,6 +584,7 @@ return function(mod)
  mod.events:on("game.ready", function()
  pcall(textPass)
  pcall(menuPass)
+ if originMark then pcall(originMark) end
  pcall(checkNameTagsSupport)
  local ok, P = pcall(displayPass)
  if not ok then
