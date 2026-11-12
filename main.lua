@@ -15,9 +15,9 @@ local function has_lower_ascii(s) return s:find("%l") ~= nil end
 
 local function titlecase(name)
  if type(name) ~= "string" or name == "" then return nil end
- name = name:gsub("É", "é") 
- if has_lower_ascii((name:gsub("é", ""))) then return nil end 
- if name:find("[{<%%]") then return nil end 
+ name = name:gsub("É", "é")
+ if has_lower_ascii((name:gsub("é", ""))) then return nil end
+ if name:find("[{<%%]") then return nil end
  if EXACT[name] then return EXACT[name] end
 
  local out = {}
@@ -48,7 +48,7 @@ local TEXT_KEEP = {
 
 local MARK_OPEN, MARK_CLOSE = string.char(1), string.char(2)
 
-local function maskName(s, name, store)
+local function maskName(s, name, store, aliases)
  local out, pos = {}, 1
  while true do
  local a, b = s:find(name, pos, true)
@@ -58,7 +58,7 @@ local function maskName(s, name, store)
  out[#out + 1] = s:sub(pos, b)
  else
  out[#out + 1] = s:sub(pos, a - 1)
- store[#store + 1] = name
+ store[#store + 1] = (aliases and aliases[name]) or name
  out[#out + 1] = MARK_OPEN .. #store .. MARK_CLOSE
  end
  pos = b + 1
@@ -67,16 +67,16 @@ local function maskName(s, name, store)
  return table.concat(out)
 end
 
-local function decapText(s, protected)
+local function decapText(s, protected, aliases)
  if type(s) ~= "string" or not s:find("%u") then return nil end
  local source, store = s, {}
  if protected then
- for _, name in ipairs(protected) do source = maskName(source, name, store) end
+ for _, name in ipairs(protected) do source = maskName(source, name, store, aliases) end
  end
  if source:find("É") then source = source:gsub("É", "é") end
  local result = source:gsub("[%w'é]+", function(word)
  if word:find("%d") then return nil end
- 
+
  local head, tail = word:match("^([%u\195\169]+)('%l+)$")
  if not head then head, tail = word:match("^([%u\195\169][%u\195\169]+)(s)$") end
  if head and select(2, head:gsub("%u", "")) >= 2 then
@@ -88,14 +88,14 @@ local function decapText(s, protected)
  if #letters < 1 then return nil end
  local up = word:upper()
  if TEXT_KEEP[up] then return nil end
- 
+
  if up:match("^'%u+$") then
  return "'" .. up:sub(2):lower()
  end
 
  local stem = up:match("^(%u%u+)S$")
  if stem and TEXT_KEEP[stem] then return stem .. "s" end
- 
+
  local base_poss, poss_s = up:match("^(.-)'[sS]$")
  if base_poss and #base_poss >= 2 then
  local b_letters = base_poss:gsub("[^%a]", "")
@@ -103,7 +103,7 @@ local function decapText(s, protected)
  return base_poss:sub(1, 1):upper() .. base_poss:sub(2):lower() .. "'s"
  end
  end
- 
+
  if up:match("S$") and #up > 3 then
  local base = up:sub(1, #up - 1)
  return base:sub(1, 1):upper() .. base:sub(2):lower() .. "s"
@@ -188,6 +188,7 @@ return function(mod)
  end
  end
 
+ local labelDecap
  local function textPass()
  if not DIALOGUE then return end
  local okT, T = pcall(require, "src.core.game3.scripting.text_ir")
@@ -220,7 +221,7 @@ return function(mod)
               end
             end
           end
-          if count > 0 then presetNames = set end      -- retried later while still empty
+          if count > 0 then presetNames = set end
         end
       end
       return presetNames ~= nil and presetNames[name:upper()] == true
@@ -229,6 +230,51 @@ return function(mod)
     local function rivalIsFixed(ctx)
       local okD, d = pcall(T.dialect, type(ctx) == "table" and ctx.dialect or nil)
       return okD and type(d) == "table" and d.GENDERED_PH ~= nil and d.GENDERED_PH.RIVAL == true
+    end
+
+    local function liveNicknames()
+      local found = {}
+      local Runtime = package.loaded["src.core.game3.runtime"]
+      local session = type(Runtime) == "table" and Runtime.session or nil
+      if type(session) ~= "table" then return found end
+      local Pk = package.loaded["src.core.game3.pokemon"]
+      local scanned = 0
+      local function consider(mon)
+        if type(mon) ~= "table" then return end
+        local nick = mon.nickname
+        if type(nick) ~= "string" or #nick < 2 then return end
+        if type(Pk) == "table" and type(Pk.speciesOf) == "function" and type(Pk.name) == "function" then
+          local okS, species = pcall(Pk.speciesOf, mon)
+          if okS and species then
+            local okN, default = pcall(Pk.name, species)
+            if okN and type(default) == "string" and default:upper() == nick:upper() then return end
+          end
+        end
+        found[nick] = true
+      end
+      local function walk(list)
+        if type(list) ~= "table" then return end
+        for _, mon in pairs(list) do
+          scanned = scanned + 1
+          if scanned > 1000 then return end
+          consider(mon)
+        end
+      end
+      walk(session.party)
+      local storage = session.storage
+      if type(storage) == "table" and type(storage.boxes) == "table" then
+        for _, box in pairs(storage.boxes) do
+          if type(box) == "table" then walk(box.mons) end
+        end
+      end
+      return found
+    end
+
+    local function livePlayerName()
+      if type(T._provider) ~= "function" then return nil end
+      local okF, name = pcall(function() return T._provider("playerName", T.dialect(nil), nil) end)
+      if okF and type(name) == "string" and name ~= "" then return name end
+      return nil
     end
 
     local function protectedNames(ctx)
@@ -246,8 +292,26 @@ return function(mod)
         end
         return v
       end
-      local playerValue = field("playerName")
-      if not isPreset(playerValue) then add(playerValue) end
+
+      local aliases = {}
+      local typed = livePlayerName()
+      local carried = field("playerName")
+      local reference = typed or carried
+      if reference and not isPreset(reference) then
+        add(reference)
+        if typed and typed ~= typed:upper() then
+          add(typed:upper())
+          aliases[typed:upper()] = typed
+        end
+        if carried and carried ~= reference then
+          if typed and carried:upper() == typed:upper() then
+            add(carried)
+            aliases[carried] = typed
+          else
+            add(carried)
+          end
+        end
+      end
       if not rivalIsFixed(ctx) then
         local rivalValue = field("rivalName")
         if not isPreset(rivalValue) then add(rivalValue) end
@@ -256,14 +320,27 @@ return function(mod)
       if type(vars) == "table" then
         for _, v in pairs(vars) do add(v) end
       end
-      for nick in pairs(nicknames) do add(nick) end
+      local nickSet = {}
+      for nick in pairs(nicknames) do nickSet[nick] = true end
+      for nick in pairs(liveNicknames()) do nickSet[nick] = true end
+      for nick in pairs(nickSet) do
+        add(nick)
+        local upper = nick:upper()
+        if nick ~= upper and not nickSet[upper] and aliases[upper] == nil then
+          add(upper)
+          aliases[upper] = nick
+        end
+      end
       local list = {}
       for name in pairs(set) do list[#list + 1] = name end
       table.sort(list, function(x, y)
         if #x ~= #y then return #x > #y end
         return x < y
       end)
-      return list, table.concat(list, "|")
+      local aliasKeys = {}
+      for from, to in pairs(aliases) do aliasKeys[#aliasKeys + 1] = from .. ">" .. to end
+      table.sort(aliasKeys)
+      return list, table.concat(list, "|") .. "#" .. table.concat(aliasKeys, "|"), aliases
     end
 
     local function fixPlural(value)
@@ -301,7 +378,7 @@ return function(mod)
         return ir
       end
 
-      local list, sig = protectedNames(ctx)
+      local list, sig, aliases = protectedNames(ctx)
       if not dynamic and hit and hit.n == #ir and hit.sig == sig then return hit.ir end
       local fixedRival = dynamic and rivalIsFixed(ctx)
       local out, changed = {}, false
@@ -311,14 +388,21 @@ return function(mod)
         if type(seg) == "table" then
           local replacement
           if seg.t == "text" then
-            local new = decapText(seg.s, list)
+            local new = decapText(seg.s, list, aliases)
             if new then replacement = new end
           elseif seg.t == "strvar" then
             local value = expandSeg(seg, ctx)
             if value then replacement = fixPlural(value) end
           elseif seg.t == "player" then
             local value = expandSeg(seg, ctx)
-            if value and isPreset(value) then replacement = decapText(value, nil) end
+            if value then
+              local typed = livePlayerName()
+              if isPreset(typed or value) then
+                replacement = decapText(value, nil)
+              elseif typed and value ~= typed and value:upper() == typed:upper() then
+                replacement = typed
+              end
+            end
           elseif seg.t == "rival" then
             local value = expandSeg(seg, ctx)
             if value and (fixedRival or isPreset(value)) then
@@ -361,10 +445,45 @@ return function(mod)
    end
    wrapped = wrapped + 1
  end
+
+ labelDecap = function(label)
+ local list, _, aliases = protectedNames(nil)
+ return decapText(label, list, aliases)
+ end
  rawset(T, "__decapText", true)
  dialogueText = ("dialogue: %d functions hooked"):format(wrapped)
  end
  pcall(textPass)
+
+ local menuHooked = false
+ local function menuPass()
+ if not DIALOGUE or menuHooked or not labelDecap then return end
+ local SM = package.loaded["src.ui.game3.start_menu"]
+ if type(SM) ~= "table" then
+ local okS, loaded = pcall(require, "src.ui.game3.start_menu")
+ SM = okS and loaded or nil
+ end
+ if type(SM) ~= "table" or type(SM.draw) ~= "function" then return end
+ local original = SM.draw
+ local function normalize()
+ local entries = SM.ENTRIES
+ if type(entries) ~= "table" then return end
+ for _, entry in ipairs(entries) do
+ if type(entry) == "table" and type(entry.label) == "string"
+ and entry.__decapLabel ~= entry.label then
+ local new = labelDecap(entry.label)
+ if new then entry.label = new end
+ entry.__decapLabel = entry.label
+ end
+ end
+ end
+ SM.draw = function(...)
+ pcall(normalize)
+ return original(...)
+ end
+ menuHooked = true
+ mod.log:info("decap_names: pause menu labels hooked")
+ end
 
  local displayText = "display pass: not run"
 
@@ -387,7 +506,7 @@ return function(mod)
  displayText = "display pass: no engine access"
  return nil
  end
- if rawget(P, "_names") == nil then pcall(P.name, 1) end 
+ if rawget(P, "_names") == nil then pcall(P.name, 1) end
  local species = rewriteNames(rawget(P, "_names"))
  local moves = rewriteNames(rawget(P, "_moveNames"))
  local abilities = rewriteNames(rawget(P, "_abilityNames"))
@@ -421,6 +540,7 @@ return function(mod)
  return speciesName
  end
  noteNickname(nick)
+ if result ~= nick then noteNickname(result) end
  return result
  end
  end
@@ -466,13 +586,45 @@ return function(mod)
  end
  end
 
- displayText = ("display pass: %d species, %d moves, %d abilities, %d items renamed"):format(
- species, moves, abilities, items)
+ local berries = 0
+ local okB, BT = pcall(require, "src.core.game3.rse.berry_trees")
+ if okB and type(BT) == "table" then
+ if type(BT.name) == "function" and not rawget(BT, "__decapBerry") then
+ local original = BT.name
+ BT.name = function(...)
+ local result = original(...)
+ if type(result) == "string" then
+ local new = titlecase(result)
+ if new then return new end
+ end
+ return result
+ end
+ rawset(BT, "__decapBerry", true)
+ end
+ if type(BT.berries) == "function" then
+ local okL, list = pcall(BT.berries)
+ if okL and type(list) == "table" then
+ for _, row in pairs(list) do
+ if type(row) == "table" then
+ local new = titlecase(row.name)
+ if new then
+ row.name = new
+ berries = berries + 1
+ end
+ end
+ end
+ end
+ end
+ end
+
+ displayText = ("display pass: %d species, %d moves, %d abilities, %d items, %d berries renamed"):format(
+ species, moves, abilities, items, berries)
  return P
  end
 
  mod.events:on("game.ready", function()
  pcall(textPass)
+ pcall(menuPass)
  pcall(checkNameTagsSupport)
  local ok, P = pcall(displayPass)
  if not ok then
