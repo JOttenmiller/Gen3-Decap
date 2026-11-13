@@ -461,6 +461,8 @@ return function(mod)
  return count
  end
 
+ local defaultNames = {}
+
  local function displayPass()
  local okP, P = pcall(require, "src.core.game3.pokemon")
  if not (okP and type(P) == "table") then
@@ -510,6 +512,77 @@ return function(mod)
  if type(P[fname]) == "function" then P[fname] = monWrap(P[fname]) end
  end
  rawset(P, "__decapMonNames", true)
+ end
+
+ for key in pairs(defaultNames) do defaultNames[key] = nil end
+ local speciesNames = rawget(P, "_names")
+ if type(speciesNames) == "table" then
+ for _, value in pairs(speciesNames) do
+ if type(value) == "string" and value:find("%l") then defaultNames[value:upper()] = value end
+ end
+ end
+ local okF, FrlgFont = pcall(require, "src.ui.game3.frlg_font")
+ if okF and type(FrlgFont) == "table" and type(FrlgFont.draw) == "function"
+ and not rawget(FrlgFont, "__decapDefaults") then
+ local originalDraw = FrlgFont.draw
+ FrlgFont.draw = function(text, ...)
+ if type(text) == "string" then
+ local replacement = defaultNames[text]
+ if replacement then text = replacement end
+ end
+ return originalDraw(text, ...)
+ end
+ rawset(FrlgFont, "__decapDefaults", true)
+ end
+
+ local okB, BattleText = pcall(require, "src.core.game3.battle.battle_text")
+ if okB and type(BattleText) == "table" and type(BattleText.context) == "function"
+ and not rawget(BattleText, "__decapBattle") then
+ local originalContext = BattleText.context
+ local function decapBattleName(value)
+ local direct = defaultNames[value]
+ if direct then return direct end
+ local from = 1
+ while true do
+ local space = value:find(" ", from, true)
+ if not space then return nil end
+ local replacement = defaultNames[value:sub(space + 1)]
+ if replacement then return value:sub(1, space) .. replacement end
+ from = space + 1
+ end
+ end
+ BattleText.context = function(...)
+ local ctx = originalContext(...)
+ local values = type(ctx) == "table" and ctx.battle or nil
+ local meta = type(values) == "table" and getmetatable(values) or nil
+ if meta and type(meta.__index) == "function" and not meta.__decapWrapped then
+ local inner = meta.__index
+ local trainerCodes = { [0x1D] = true }
+ local okP, Profile = pcall(require, "src.core.game3.battle.profile")
+ if okP and type(Profile.get) == "function" then
+ local okC, cfg = pcall(Profile.get)
+ if okC and type(cfg) == "table" and cfg.family == "rse" then
+ trainerCodes[0x2F] = true
+ trainerCodes[0x33] = true
+ end
+ end
+ meta.__index = function(t, code)
+ local value = inner(t, code)
+ if type(value) == "string" then
+ local new = decapBattleName(value)
+ if not new and trainerCodes[code] then new = titlecase(value) end
+ if new then
+ rawset(t, code, new)
+ return new
+ end
+ end
+ return value
+ end
+ meta.__decapWrapped = true
+ end
+ return ctx
+ end
+ rawset(BattleText, "__decapBattle", true)
  end
 
  local items = 0
