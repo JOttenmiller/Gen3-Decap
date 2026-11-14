@@ -557,12 +557,14 @@ return function(mod)
  local meta = type(values) == "table" and getmetatable(values) or nil
  if meta and type(meta.__index) == "function" and not meta.__decapWrapped then
  local inner = meta.__index
- local trainerCodes = { [0x1D] = true }
+ local trainerCodes = { [0x1C] = true, [0x1D] = true }
  local okP, Profile = pcall(require, "src.core.game3.battle.profile")
  if okP and type(Profile.get) == "function" then
  local okC, cfg = pcall(Profile.get)
  if okC and type(cfg) == "table" and cfg.family == "rse" then
+ trainerCodes[0x2E] = true
  trainerCodes[0x2F] = true
+ trainerCodes[0x32] = true
  trainerCodes[0x33] = true
  end
  end
