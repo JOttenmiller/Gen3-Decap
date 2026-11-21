@@ -446,6 +446,43 @@ return function(mod)
  mod.log:info("decap_names: pause menu labels hooked")
  end
 
+ local partyHooked = false
+ local function partyMenuPass()
+ if not DIALOGUE or partyHooked or not labelDecap then return end
+ local PM = package.loaded["src.ui.game3.party_menu"]
+ if type(PM) ~= "table" then
+ local okP, loaded = pcall(require, "src.ui.game3.party_menu")
+ PM = okP and loaded or nil
+ end
+ if type(PM) ~= "table" or type(PM.draw) ~= "function" or type(PM._actionTextsFor) ~= "function" then
+ return
+ end
+ local original = PM.draw
+ local function normalize(list)
+ if type(list) ~= "table" then return end
+ local texts = PM._actionTextsFor(list)
+ if type(texts) ~= "table" or texts.__decapDone then return end
+ for i, text in ipairs(texts) do
+ if type(text) == "string" then
+ local new = labelDecap(text)
+ if new then texts[i] = new end
+ end
+ end
+ texts.__decapDone = true
+ end
+ PM.draw = function(...)
+ local mode = PM.mode
+ if mode == "item_action" then
+ pcall(normalize, PM.ITEM_ACTIONS)
+ elseif mode == "action" or mode == "choose_multi" then
+ pcall(normalize, PM.ACTIONS)
+ end
+ return original(...)
+ end
+ partyHooked = true
+ mod.log:info("decap_names: party menu labels hooked")
+ end
+
  local displayText = "display pass: not run"
 
  local function rewriteNames(t)
@@ -659,6 +696,7 @@ return function(mod)
  mod.events:on("game.ready", function()
  pcall(textPass)
  pcall(menuPass)
+ pcall(partyMenuPass)
  if originMark then pcall(originMark) end
  pcall(checkNameTagsSupport)
  local ok, P = pcall(displayPass)
