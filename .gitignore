@@ -1,2 +1,9 @@
 sources.txt
 src/
+tests/
+test/
+design.md
+CHANGELOG.md
+LICENSE
+README.md
+decap-*.zip
