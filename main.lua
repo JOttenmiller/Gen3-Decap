@@ -1,4 +1,10 @@
-local KEEP_UPPER = { HP = true, PP = true, TM = true, HM = true, SP = true, XS = true, XL = true }
+local KEEP = {
+ HP = true, PP = true, TM = true, HM = true, SP = true, XS = true, XL = true,
+ PC = true, ID = true, TV = true, OK = true, GBA = true, GB = true, HQ = true,
+ DJ = true, CD = true, DNA = true, UFO = true, VS = true, SOS = true,
+ EV = true, IV = true, EXP = true, XP = true, NPC = true, AI = true,
+ PKMN = true, PK = true, MN = true, SS = true,
+}
 
 local EXACT = {
  ["MR. MIME"] = "Mr. Mime",
@@ -9,6 +15,13 @@ local EXACT = {
  ["POKé DOLL"] = "Poké Doll",
  ["POKé FLUTE"] = "Poké Flute",
  ["POKéMON"] = "Pokémon",
+ ["POKéNAV"] = "PokéNav",
+ ["POKéGEAR"] = "PokéGear",
+}
+
+local WORD_EXACT = {
+ ["POKéNAV"] = "PokéNav",
+ ["POKéGEAR"] = "PokéGear",
 }
 
 local function has_lower_ascii(s) return s:find("%l") ~= nil end
@@ -28,8 +41,17 @@ local function titlecase(name)
  out[#out + 1] = name:sub(pos, s - 1)
  local word = name:sub(s, e)
  local up = word:upper()
- if KEEP_UPPER[up] or up:match("^[TH]M%d+$") then
+ local exact = WORD_EXACT[up]
+ local poss = up:match("^(%u%u+)'[sS]$")
+ local plural = up:match("^(%u%u+)S$")
+ if exact then
+ out[#out + 1] = exact
+ elseif KEEP[up] or up:match("^[TH]M%d+$") then
  out[#out + 1] = up
+ elseif poss and KEEP[poss] then
+ out[#out + 1] = poss .. "'s"
+ elseif plural and KEEP[plural] then
+ out[#out + 1] = plural .. "s"
  else
  out[#out + 1] = word:sub(1, 1):upper() .. word:sub(2):lower()
  end
@@ -39,12 +61,6 @@ local function titlecase(name)
  if result == name then return nil end
  return result
 end
-
-local TEXT_KEEP = {
- PC = true, TM = true, HM = true, HP = true, PP = true, ID = true, TV = true, OK = true,
- GBA = true, GB = true, HQ = true, DJ = true, CD = true, SP = true, XS = true, XL = true,
- DNA = true, UFO = true, VS = true, SOS = true,
-}
 
 local MARK_OPEN, MARK_CLOSE = string.char(1), string.char(2)
 
@@ -68,36 +84,60 @@ local function maskName(s, name, store, aliases)
 end
 
 local function decapText(s, protected, aliases)
- if type(s) ~= "string" or not s:find("%u") then return nil end
+ if type(s) ~= "string" or not (s:find("%u") or s:find("É", 1, true)) then return nil end
  local source, store = s, {}
+ if source:find("É") then source = source:gsub("É", "é") end
+ if source:find("[{}]") then
+ source = source:gsub("{[^{}]*}", function(token)
+ store[#store + 1] = token
+ return MARK_OPEN .. #store .. MARK_CLOSE
+ end)
+ if source:find("[{}]") then return nil end
+ end
  if protected then
  for _, name in ipairs(protected) do source = maskName(source, name, store, aliases) end
  end
- if source:find("É") then source = source:gsub("É", "é") end
+ local exact = EXACT[source]
+ if exact then return exact end
  local result = source:gsub("[%w'é]+", function(word)
- if word:find("%d") then return nil end
+ if word:find("%d") then
+ local upper = word:upper()
+ if upper:match("^[TH]M%d+$") then return nil end
+ local stem, digits = word:match("^([%a'é]+)(%d+)$")
+ if stem and #stem >= 2 then
+ return stem:sub(1, 1):upper() .. stem:sub(2):lower() .. digits
+ end
+ return nil
+ end
 
  local head, tail = word:match("^([%u\195\169]+)('%l+)$")
  if not head then head, tail = word:match("^([%u\195\169][%u\195\169]+)(s)$") end
  if head and select(2, head:gsub("%u", "")) >= 2 then
- if TEXT_KEEP[head] then return nil end
+ local exactHead = WORD_EXACT[head]
+ if exactHead then return exactHead .. tail end
+ if KEEP[head] then return nil end
  return head:sub(1, 1):upper() .. head:sub(2):lower() .. tail
  end
  if word:find("%l") then return nil end
  local letters = word:gsub("[^%a]", "")
  if #letters < 1 then return nil end
  local up = word:upper()
- if TEXT_KEEP[up] then return nil end
+ if KEEP[up] then return nil end
+ local exactWord = WORD_EXACT[up]
+ if exactWord then return exactWord end
 
  if up:match("^'%u+$") then
  return "'" .. up:sub(2):lower()
  end
 
  local stem = up:match("^(%u%u+)S$")
- if stem and TEXT_KEEP[stem] then return stem .. "s" end
+ if stem and KEEP[stem] then return stem .. "s" end
 
- local base_poss, poss_s = up:match("^(.-)'[sS]$")
+ local base_poss = up:match("^(.-)'[sS]$")
  if base_poss and #base_poss >= 2 then
+ local exactBase = WORD_EXACT[base_poss]
+ if exactBase then return exactBase .. "'s" end
+ if KEEP[base_poss] then return base_poss .. "'s" end
  local b_letters = base_poss:gsub("[^%a]", "")
  if #b_letters >= 2 then
  return base_poss:sub(1, 1):upper() .. base_poss:sub(2):lower() .. "'s"
@@ -119,7 +159,7 @@ local function decapText(s, protected, aliases)
 end
 
 return function(mod)
- local SHOW_SUMMARY = false
+ local SHOW_SUMMARY = true
  local DIALOGUE = true
 
  local FIELDS = {
@@ -153,7 +193,6 @@ return function(mod)
  if not okEach then
  mod.log:warn("decap_names: could not iterate %s: %s", registry, tostring(errEach))
  end
- table.sort(patches, function(a, b) return tostring(a.id) < tostring(b.id) end)
  for _, p in ipairs(patches) do
  local okPatch, res, reason = pcall(handle.patch, handle, p.id, p.patch)
  if okPatch and res ~= nil then
@@ -170,18 +209,33 @@ return function(mod)
  end
  end
 
+ if SHOW_SUMMARY then
+ local parts = {}
+ for _, entry in ipairs(FIELDS) do
+ local t = totals[entry[1]]
+ if t and (t.changed > 0 or t.refused > 0) then
+ parts[#parts + 1] = ("%s %d/%d"):format(entry[1], t.changed, t.seen)
+ if t.refused > 0 then parts[#parts] = parts[#parts] .. (" (%d refused)"):format(t.refused) end
+ end
+ end
+ if #parts > 0 then
+ mod.log:info("decap_names: content names: %s", table.concat(parts, ", "))
+ end
+ end
+
  local dialogueText = DIALOGUE and "dialogue: not hooked" or "dialogue: off"
- local dialogueSegs = 0
 
  local function checkNameTagsSupport()
- local okNT, nameTags = pcall(function() return mod.find and mod.find("name_tags") or require("mods.name_tags.main") end)
- if okNT and nameTags then
- mod.log:info("decap_names: Optional name_tags support detected and linked.")
+ if type(mod.find) ~= "function" then return end
+ local ok, handle = pcall(mod.find, mod, "name_tags")
+ if ok and handle then
+ mod.log:info("decap_names: optional name_tags mod detected")
  end
  end
 
  local labelDecap
  local originMark
+ local isPresetName
  local function textPass()
  if not DIALOGUE then return end
  local okT, T = pcall(require, "src.core.game3.scripting.text_ir")
@@ -192,33 +246,44 @@ return function(mod)
  if rawget(T, "__decapText") then return end
 
     local presetNames
+    local buildingPreset = false
     local function isPreset(name)
       if type(name) ~= "string" or name == "" then return false end
+      if buildingPreset then return false end
       if not presetNames then
         local okR, RomText = pcall(require, "src.core.game3.rom_text")
         if okR and type(RomText) == "table" and type(RomText.list) == "function" then
           local set, count = {}, 0
-          for _, key in ipairs({ "sMaleNameChoices", "sFemaleNameChoices", "sRivalNameChoices" }) do
-            local okL, list = pcall(RomText.list, key)
-            if okL and type(list) == "table" then
-              for _, entry in ipairs(list) do
-                local text = entry
-                if type(text) == "table" then
-                  local okP, plain = pcall(T.toPlain, text, {})
-                  text = okP and plain or nil
-                end
-                if type(text) == "string" and text ~= "" then
-                  set[text:upper()] = true
-                  count = count + 1
+          buildingPreset = true
+          local okBuild = pcall(function()
+            for _, key in ipairs({ "sMaleNameChoices", "sFemaleNameChoices", "sRivalNameChoices" }) do
+              local okL, list = pcall(RomText.list, key)
+              if okL and type(list) == "table" then
+                for _, entry in ipairs(list) do
+                  local text = entry
+                  if type(text) == "table" then
+                    local okP, plain = pcall(T.toPlain, text, {})
+                    text = okP and plain or nil
+                  end
+                  if type(text) == "string" and text ~= "" then
+                    set[text:upper()] = true
+                    count = count + 1
+                  end
                 end
               end
             end
+          end)
+          buildingPreset = false
+          if not okBuild then
+            mod.log:warn("decap_names: could not read preset name lists; preset names will be treated as custom names")
+          elseif count > 0 then
+            presetNames = set
           end
-          if count > 0 then presetNames = set end
         end
       end
       return presetNames ~= nil and presetNames[name:upper()] == true
     end
+    isPresetName = isPreset
 
     local function rivalIsFixed(ctx)
       local okD, d = pcall(T.dialect, type(ctx) == "table" and ctx.dialect or nil)
@@ -233,6 +298,7 @@ return function(mod)
     end
 
     local function protectedNames(ctx)
+      if buildingPreset then return {}, "#preset", {} end
       local set = {}
       local function add(v)
         if type(v) == "string" and #v >= 2 then set[v] = true end
@@ -284,8 +350,8 @@ return function(mod)
     end
 
     local function fixPlural(value)
-      if value:find("Ball S$") or value:find("[Bb]allS$") then return (value:gsub("S$", "s")) end
-      if value:find("BerrIES$") then return (value:gsub("IES$", "ies")) end
+      if value:match("[Bb]all%s*S$") then return (value:gsub("%s*S$", "s")) end
+      if value:match("[Bb]err[iI][eE][sS]$") then return (value:gsub("[iI][eE][sS]$", "ies")) end
       return nil
     end
 
@@ -358,7 +424,6 @@ return function(mod)
             copy.t, copy.s = "text", replacement
             out[i] = copy
             changed = true
-            dialogueSegs = dialogueSegs + 1
           end
         end
       end
@@ -411,37 +476,88 @@ return function(mod)
  local list, _, aliases = protectedNames(nil)
  return decapText(label, list, aliases)
  end
+ local okPlain, RomText = pcall(require, "src.core.game3.rom_text")
+ if okPlain and type(RomText) == "table" and type(RomText.plain) == "function"
+ and not rawget(RomText, "__decapPlain") then
+ local originalPlain = RomText.plain
+ RomText.plain = function(key, ctx)
+ local out = originalPlain(key, ctx)
+ if type(out) ~= "string" then return out end
+ local list, _, aliases = protectedNames(ctx)
+ local new = decapText(out, list, aliases)
+ return new or out
+ end
+ rawset(RomText, "__decapPlain", true)
+ end
  rawset(T, "__decapText", true)
  dialogueText = ("dialogue: %d functions hooked, origin mode"):format(wrapped)
  end
- pcall(textPass)
+ local okText, errText = pcall(textPass)
+ if not okText then
+ dialogueText = "dialogue: hook error"
+ mod.log:warn("decap_names: dialogue hooks failed: %s", tostring(errText))
+ end
+
+ local function loadModule(path)
+ local ok, module = pcall(require, path)
+ return ok and type(module) == "table" and module or nil
+ end
+
+ local function decapRows(rows)
+ if type(rows) ~= "table" then return rows end
+ for _, entry in ipairs(rows) do
+ if type(entry) == "table" and type(entry.label) == "string" then
+ local new = labelDecap(entry.label)
+ if new then entry.label = new end
+ end
+ end
+ return rows
+ end
+
+ local function canHook(name)
+ if not (mod.hooks and type(mod.hooks.wrap) == "function") then return false end
+ local ok, supported = pcall(mod.supports, mod, "hooks", name)
+ return ok and supported == true
+ end
+
+ local function installHook(name, callback, priority)
+ local ok = pcall(mod.hooks.wrap, mod.hooks, name, callback, priority)
+ return ok
+ end
 
  local menuHooked = false
  local function menuPass()
  if not DIALOGUE or menuHooked or not labelDecap then return end
- local SM = package.loaded["src.ui.game3.start_menu"]
- if type(SM) ~= "table" then
- local okS, loaded = pcall(require, "src.ui.game3.start_menu")
- SM = okS and loaded or nil
+ local hooked = false
+ if canHook("ui.start_menu.items") then
+ local ok = installHook("ui.start_menu.items", function(nextFn, game, items)
+ local rows = nextFn(game, items)
+ return decapRows(rows)
+ end, 1000000)
+ if ok then hooked = true end
  end
- if type(SM) ~= "table" or type(SM.draw) ~= "function" then return end
+ local SM = loadModule("src.ui.game3.start_menu")
+ if SM and type(SM.draw) == "function" then
  local original = SM.draw
  local function normalize()
  local entries = SM.ENTRIES
  if type(entries) ~= "table" then return end
  for _, entry in ipairs(entries) do
- if type(entry) == "table" and type(entry.label) == "string"
- and entry.__decapLabel ~= entry.label then
+ if type(entry) == "table" and type(entry.label) == "string" then
  local new = labelDecap(entry.label)
  if new then entry.label = new end
- entry.__decapLabel = entry.label
  end
  end
  end
  SM.draw = function(...)
  pcall(normalize)
- return original(...)
+ local result = original(...)
+ pcall(normalize)
+ return result
  end
+ hooked = true
+ end
+ if not hooked then return end
  menuHooked = true
  mod.log:info("decap_names: pause menu labels hooked")
  end
@@ -449,36 +565,45 @@ return function(mod)
  local partyHooked = false
  local function partyMenuPass()
  if not DIALOGUE or partyHooked or not labelDecap then return end
- local PM = package.loaded["src.ui.game3.party_menu"]
- if type(PM) ~= "table" then
- local okP, loaded = pcall(require, "src.ui.game3.party_menu")
- PM = okP and loaded or nil
+ local hooked = false
+ if canHook("ui.party.submenu") then
+ local ok = installHook("ui.party.submenu", function(nextFn, game, items, mon, ctx)
+ local rows = nextFn(game, items, mon, ctx)
+ return decapRows(rows)
+ end, 1000000)
+ if ok then hooked = true end
  end
- if type(PM) ~= "table" or type(PM.draw) ~= "function" or type(PM._actionTextsFor) ~= "function" then
- return
- end
+ local PM = loadModule("src.ui.game3.party_menu")
+ if PM and type(PM.draw) == "function" and type(PM._actionTextsFor) == "function" then
  local original = PM.draw
  local function normalize(list)
  if type(list) ~= "table" then return end
  local texts = PM._actionTextsFor(list)
- if type(texts) ~= "table" or texts.__decapDone then return end
+ if type(texts) ~= "table" then return end
  for i, text in ipairs(texts) do
  if type(text) == "string" then
  local new = labelDecap(text)
  if new then texts[i] = new end
  end
  end
- texts.__decapDone = true
  end
- PM.draw = function(...)
+ local function normalizeCurrent()
  local mode = PM.mode
  if mode == "item_action" then
- pcall(normalize, PM.ITEM_ACTIONS)
+ normalize(PM.ITEM_ACTIONS)
  elseif mode == "action" or mode == "choose_multi" then
- pcall(normalize, PM.ACTIONS)
+ normalize(PM.ACTIONS)
  end
- return original(...)
  end
+ PM.draw = function(...)
+ pcall(normalizeCurrent)
+ local result = original(...)
+ pcall(normalizeCurrent)
+ return result
+ end
+ hooked = true
+ end
+ if not hooked then return end
  partyHooked = true
  mod.log:info("decap_names: party menu labels hooked")
  end
@@ -498,7 +623,19 @@ return function(mod)
  return count
  end
 
- local defaultNames = {}
+ local function sharedNameMap(P)
+ local map = rawget(P, "__decapDefaultNames")
+ if type(map) ~= "table" then
+ map = {}
+ rawset(P, "__decapDefaultNames", map)
+ end
+ return map
+ end
+
+ local function decapString(value)
+ if type(value) ~= "string" then return value end
+ return decapText(value) or value
+ end
 
  local function displayPass()
  local okP, P = pcall(require, "src.core.game3.pokemon")
@@ -506,6 +643,9 @@ return function(mod)
  displayText = "display pass: no engine access"
  return nil
  end
+ local defaultNames = sharedNameMap(P)
+ for key in pairs(defaultNames) do defaultNames[key] = nil end
+ if type(isPresetName) == "function" then rawset(P, "__decapIsPreset", isPresetName) end
  if rawget(P, "_names") == nil then pcall(P.name, 1) end
  local species = rewriteNames(rawget(P, "_names"))
  local moves = rewriteNames(rawget(P, "_moveNames"))
@@ -526,7 +666,6 @@ return function(mod)
 
  if not rawget(P, "__decapMonNames") then
  local function monWrap(original)
- local okNT, nameTags = pcall(function() return mod.find and mod.find("name_tags") or require("mods.name_tags.main") end)
  return function(mon, ...)
  local result = original(mon, ...)
  if type(result) ~= "string" then return result end
@@ -551,10 +690,14 @@ return function(mod)
  rawset(P, "__decapMonNames", true)
  end
 
- for key in pairs(defaultNames) do defaultNames[key] = nil end
  local speciesNames = rawget(P, "_names")
  if type(speciesNames) == "table" then
  for _, value in pairs(speciesNames) do
+ if type(value) == "string" and value:find("%l") then defaultNames[value:upper()] = value end
+ end
+ end
+ for _, names in ipairs({ rawget(P, "_moveNames") or {}, rawget(P, "_abilityNames") or {} }) do
+ for _, value in pairs(names) do
  if type(value) == "string" and value:find("%l") then defaultNames[value:upper()] = value end
  end
  end
@@ -595,6 +738,7 @@ return function(mod)
  if meta and type(meta.__index) == "function" and not meta.__decapWrapped then
  local inner = meta.__index
  local trainerCodes = { [0x1C] = true, [0x1D] = true }
+ local playerCodes = { [0x23] = true }
  local okP, Profile = pcall(require, "src.core.game3.battle.profile")
  if okP and type(Profile.get) == "function" then
  local okC, cfg = pcall(Profile.get)
@@ -609,7 +753,16 @@ return function(mod)
  local value = inner(t, code)
  if type(value) == "string" then
  local new = decapBattleName(value)
- if not new and trainerCodes[code] then new = titlecase(value) end
+ if not new then
+ if trainerCodes[code] then
+ new = titlecase(value)
+ elseif playerCodes[code] then
+ local presetCheck = rawget(P, "__decapIsPreset") or isPresetName
+ if type(presetCheck) == "function" and presetCheck(value) then
+ new = titlecase(value)
+ end
+ end
+ end
  if new then
  rawset(t, code, new)
  return new
@@ -622,6 +775,53 @@ return function(mod)
  return ctx
  end
  rawset(BattleText, "__decapBattle", true)
+ end
+
+ local okSum, SummaryData = pcall(require, "src.core.game3.summary_data")
+ if okSum and type(SummaryData) == "table" and not rawget(SummaryData, "__decapDescriptions") then
+ for _, fname in ipairs({ "moveDescription", "abilityDescription", "contestEffectDescription", "contestCategoryName" }) do
+ local fn = SummaryData[fname]
+ if type(fn) == "function" then
+ SummaryData[fname] = function(...) return decapString(fn(...)) end
+ end
+ end
+ rawset(SummaryData, "__decapDescriptions", true)
+ end
+
+ local okPD, PokedexData = pcall(require, "src.core.game3.pokedex_data")
+ if okPD and type(PokedexData) == "table" and type(PokedexData.getEntry) == "function"
+ and not rawget(PokedexData, "__decapPokedex") then
+ local original = PokedexData.getEntry
+ PokedexData.getEntry = function(...)
+ local entry = original(...)
+ if type(entry) == "table" then
+ for _, key in ipairs({ "category", "categoryName", "description", "description2" }) do
+ if type(entry[key]) == "string" then entry[key] = decapString(entry[key]) end
+ end
+ end
+ return entry
+ end
+ rawset(PokedexData, "__decapPokedex", true)
+ end
+
+ local okMap, Mapsec = pcall(require, "src.ui.game3.rse.mapsec")
+ if okMap and type(Mapsec) == "table" and type(Mapsec.readLua) == "function"
+ and not rawget(Mapsec, "__decapPokedex") then
+ local original = Mapsec.readLua
+ Mapsec.readLua = function(rel, ...)
+ local pack = original(rel, ...)
+ if rel == "pokemon/pokedex/entries.lua" and type(pack) == "table" then
+ for _, entry in pairs(pack) do
+ if type(entry) == "table" then
+ for _, key in ipairs({ "category", "description", "description2" }) do
+ if type(entry[key]) == "string" then entry[key] = decapString(entry[key]) end
+ end
+ end
+ end
+ end
+ return pack
+ end
+ rawset(Mapsec, "__decapPokedex", true)
  end
 
  local items = 0
@@ -640,6 +840,11 @@ return function(mod)
  row.name = new
  items = items + 1
  end
+ local desc = decapText(row.description)
+ if desc then row.description = desc end
+ if type(row.name) == "string" and row.name:find("%l") then
+ defaultNames[row.name:upper()] = row.name
+ end
  end
  end
  end
@@ -647,13 +852,25 @@ return function(mod)
  local original = I.info
  I.info = function(...)
  local result = original(...)
- if type(result) == "table" and type(result.name) == "string" then
+ if type(result) == "table" then
+ if type(result.name) == "string" then
  local new = titlecase(result.name)
  if new then result.name = new end
+ end
+ if type(result.description) == "string" then
+ result.description = decapString(result.description)
+ end
  end
  return result
  end
  rawset(I, "__decapNames", true)
+ end
+ if type(I.description) == "function" and not rawget(I, "__decapItemDesc") then
+ local original = I.description
+ I.description = function(...)
+ return decapString(original(...))
+ end
+ rawset(I, "__decapItemDesc", true)
  end
  end
 
@@ -682,6 +899,9 @@ return function(mod)
  row.name = new
  berries = berries + 1
  end
+ if type(row.name) == "string" and row.name:find("%l") then
+ defaultNames[row.name:upper()] = row.name
+ end
  end
  end
  end
@@ -694,10 +914,19 @@ return function(mod)
  end
 
  mod.events:on("game.ready", function()
- pcall(textPass)
- pcall(menuPass)
- pcall(partyMenuPass)
- if originMark then pcall(originMark) end
+ local okText, errText = pcall(textPass)
+ if not okText then
+ dialogueText = "dialogue: hook error"
+ mod.log:warn("decap_names: dialogue hooks failed: %s", tostring(errText))
+ end
+ local okMenu, errMenu = pcall(menuPass)
+ if not okMenu then mod.log:warn("decap_names: pause menu hook failed: %s", tostring(errMenu)) end
+ local okParty, errParty = pcall(partyMenuPass)
+ if not okParty then mod.log:warn("decap_names: party menu hook failed: %s", tostring(errParty)) end
+ if originMark then
+ local okOrigin, errOrigin = pcall(originMark)
+ if not okOrigin then mod.log:warn("decap_names: origin hook failed: %s", tostring(errOrigin)) end
+ end
  pcall(checkNameTagsSupport)
  local ok, P = pcall(displayPass)
  if not ok then
@@ -707,7 +936,10 @@ return function(mod)
  end
  mod.log:info("decap_names: %s; %s", displayText, dialogueText)
  if P and type(P.onReload) == "function" then
- P.onReload(function() pcall(displayPass) end, "decap_names")
+ P.onReload(function()
+ local okReload, errReload = pcall(displayPass)
+ if not okReload then mod.log:warn("decap_names: display reload failed: %s", tostring(errReload)) end
+ end, "decap_names")
  end
  end)
 end
