@@ -13,7 +13,8 @@
   "priority": 100,
   "optional_dependencies": [
     "national_dex_gen3",
-    "name_tags"
+    "name_tags",
+    "omni_ui"
   ],
   "permissions": [
     "engine_internals"
