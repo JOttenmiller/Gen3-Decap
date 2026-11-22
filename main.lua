@@ -6,6 +6,16 @@ local KEEP = {
   PKMN = true, PK = true, MN = true, SS = true,
 }
 
+local OMNI_KEEP = {
+  PSN = true, TOX = true, PAR = true, PRZ = true, BRN = true,
+  SLP = true, FRZ = true, FNT = true, PKRS = true,
+  OT = true, PWR = true, ACC = true, ATK = true, DEF = true,
+  SPA = true, SPD = true, SPE = true, HT = true, WT = true,
+  KO = true, OHKO = true, AB = true, GH = true,
+  UI = true, API = true, HUD = true, SYS = true,
+  SFX = true, BGM = true, FPS = true, RTC = true, GBC = true, SGB = true,
+}
+
 local EXACT = {
   ["MR. MIME"] = "Mr. Mime",
   ["MR.MIME"] = "Mr. Mime",
@@ -57,10 +67,10 @@ local function capFirst(word)
 end
 
 local function isWordByte(b)
-  return (b >= 48 and b <= 57)  -- 0-9
-      or (b >= 65 and b <= 90)  -- A-Z
-      or (b >= 97 and b <= 122) -- a-z
-      or b == 39                -- '
+  return (b >= 48 and b <= 57)
+      or (b >= 65 and b <= 90)
+      or (b >= 97 and b <= 122)
+      or b == 39
 end
 
 local function mapWords(s, fn)
@@ -112,13 +122,17 @@ local function mapWords(s, fn)
   return table.concat(out)
 end
 
-local function normalizeWord(word)
+local function isKeep(token, extraKeep)
+  return KEEP[token] == true or (extraKeep ~= nil and extraKeep[token] == true)
+end
+
+local function normalizeWord(word, extraKeep)
   if word:find("%d") then
     if word:find("[a-z]") then return nil end
     if word:match("^[TH]M%d+$") then return nil end
     local stem, digits = word:match("^(.-)(%d+)$")
     if stem and #stem >= 2 and not stem:find("%d") and countUpperAscii(stem) >= 2 then
-      if KEEP[stem] then return nil end
+      if isKeep(stem, extraKeep) then return nil end
       local exactStem = WORD_EXACT[stem]
       if exactStem then return exactStem .. digits end
       return capFirst(stem) .. digits
@@ -133,14 +147,14 @@ local function normalizeWord(word)
   if head and countUpperAscii(head) >= 2 then
     local exactHead = WORD_EXACT[head]
     if exactHead then return exactHead .. tail end
-    if KEEP[head] then return nil end
+    if isKeep(head, extraKeep) then return nil end
     return capFirst(head) .. tail
   end
 
   if hasLowerAscii(word) then return nil end
   if not word:find("[A-Z]") then return nil end
 
-  if KEEP[word] then return nil end
+  if isKeep(word, extraKeep) then return nil end
   local exactWord = WORD_EXACT[word]
   if exactWord then return exactWord end
 
@@ -152,7 +166,7 @@ local function normalizeWord(word)
   if basePoss and #basePoss >= 2 then
     local exactBase = WORD_EXACT[basePoss]
     if exactBase then return exactBase .. "'s" end
-    if KEEP[basePoss] then return basePoss .. "'s" end
+    if isKeep(basePoss, extraKeep) then return basePoss .. "'s" end
     if countUpperAscii(basePoss) >= 2 then
       return capFirst(basePoss) .. "'s"
     end
@@ -162,7 +176,7 @@ local function normalizeWord(word)
   if basePlural and #basePlural >= 2 then
     local exactBase = WORD_EXACT[basePlural]
     if exactBase then return exactBase .. "s" end
-    if KEEP[basePlural] then return basePlural .. "s" end
+    if isKeep(basePlural, extraKeep) then return basePlural .. "s" end
   end
 
   return capFirst(word)
@@ -222,7 +236,7 @@ local function hasAnyKey(t)
   return type(t) == "table" and next(t) ~= nil
 end
 
-local function decapText(s, protected, aliases)
+local function decapText(s, protected, aliases, extraKeep)
   if not needsDecap(s, hasAnyKey(aliases)) then return nil end
   local source, store = s, {}
   if source:find(E_ACUTE_UPPER, 1, true) then
@@ -244,7 +258,9 @@ local function decapText(s, protected, aliases)
   if exact then
     return exact ~= s and exact or nil
   end
-  local result = mapWords(source, normalizeWord)
+  local result = mapWords(source, extraKeep and function(word)
+    return normalizeWord(word, extraKeep)
+  end or normalizeWord)
   if #store > 0 then
     result = result:gsub(MARK_OPEN .. "(%d+)" .. MARK_CLOSE, function(i)
       return store[tonumber(i)]
@@ -254,9 +270,19 @@ local function decapText(s, protected, aliases)
   return result
 end
 
-local function decapString(value)
+local function decapString(value, extraKeep)
   if type(value) ~= "string" then return value end
-  return decapText(value) or value
+  return decapText(value, nil, nil, extraKeep) or value
+end
+
+local function collapseDuplicatePokemon(s)
+  if not s:find("POK", 1, true) then return s end
+  local work = s:find(E_ACUTE_UPPER, 1, true) and s:gsub(E_ACUTE_UPPER, E_ACUTE) or s
+  work = work:gsub("POK" .. E_ACUTE .. "MON%s+POK" .. E_ACUTE .. "MON", "POK" .. E_ACUTE .. "MON")
+  work = work:gsub("POKEMON%s+POK" .. E_ACUTE .. "MON", "POK" .. E_ACUTE .. "MON")
+  work = work:gsub("POK" .. E_ACUTE .. "MON%s+PKMN", "PKMN")
+  work = work:gsub("POKEMON%s+PKMN", "PKMN")
+  return work
 end
 
 local function decapDexFields(entry)
@@ -340,10 +366,17 @@ return function(mod)
 
   local dialogueText = DIALOGUE and "dialogue: not hooked" or "dialogue: off"
 
+  local function findMod(id)
+    if type(mod.find) ~= "function" then return nil end
+    local ok, handle = pcall(mod.find, id)
+    if ok and handle ~= nil then return handle end
+    local okMethod, handleMethod = pcall(mod.find, mod, id)
+    if okMethod and handleMethod ~= nil then return handleMethod end
+    return nil
+  end
+
   local function checkNameTagsSupport()
-    if type(mod.find) ~= "function" then return end
-    local ok, handle = pcall(mod.find, mod, "name_tags")
-    if ok and handle then
+    if findMod("name_tags") then
       mod.log:info("decap_names: optional name_tags mod detected")
     end
   end
@@ -802,8 +835,8 @@ return function(mod)
     if not DIALOGUE or partyHooked or not labelDecap then return end
     local hooked = false
     if canHook("ui.party.submenu") then
-      local ok = installHook("ui.party.submenu", function(nextFn, game, items, mon, ctx)
-        local rows = nextFn(game, items, mon, ctx)
+      local ok = installHook("ui.party.submenu", function(nextFn, ...)
+        local rows = nextFn(...)
         return decapRows(rows)
       end, 1000000)
       if ok then hooked = true end
@@ -1182,6 +1215,18 @@ return function(mod)
         end
         rawset(I, "__decapItemDesc", true)
       end
+      if type(I.displayName) == "function" and not rawget(I, "__decapDisplayName") then
+        local original = I.displayName
+        I.displayName = function(...)
+          local result = original(...)
+          if type(result) == "string" then
+            local new = titlecase(result)
+            if new then return new end
+          end
+          return result
+        end
+        rawset(I, "__decapDisplayName", true)
+      end
     end
 
     local berries = 0
@@ -1225,6 +1270,279 @@ return function(mod)
     return P
   end
 
+  local resetOmniCache
+  local function omniPass()
+    if not DIALOGUE then return end
+    local handle = findMod("omni_ui")
+    if not (type(handle) == "table" and type(handle.exports) == "table") then return end
+    local exports = handle.exports
+    local Layout = exports.Layout
+    if type(Layout) ~= "table" or type(Layout.cleanText) ~= "function" then return end
+
+    local state = rawget(Layout, "__decapOmniState")
+    if type(state) ~= "table" then
+      state = { bypassDepth = 0, bypassText = nil }
+      rawset(Layout, "__decapOmniState", state)
+    end
+
+    local namingMod, namingTried = nil, false
+    local runtimeMod, runtimeTried = nil, false
+    local partyMod, partyTried = nil, false
+    local battleMod, battleTried = nil, false
+    local pokemonMod, pokemonTried = nil, false
+
+    local function isNamingOpen()
+      if not namingTried then
+        namingTried = true
+        namingMod = loadModule("src.ui.game3.naming")
+      end
+      if not namingMod then return false end
+      if namingMod.openFlag == true then return true end
+      if type(namingMod.isOpen) == "function" then
+        local okOpen, open = pcall(namingMod.isOpen)
+        if okOpen and open == true then return true end
+      end
+      return false
+    end
+
+    local function collectCustomNicknames()
+      if not pokemonTried then
+        pokemonTried = true
+        pokemonMod = loadModule("src.core.game3.pokemon")
+      end
+      if not runtimeTried then
+        runtimeTried = true
+        runtimeMod = loadModule("src.core.game3.runtime")
+      end
+      if not partyTried then
+        partyTried = true
+        partyMod = loadModule("src.ui.game3.party_menu")
+      end
+      if not battleTried then
+        battleTried = true
+        battleMod = loadModule("src.core.game3.battle")
+      end
+
+      local namesTable = pokemonMod and rawget(pokemonMod, "_names")
+      local nicks, seen = nil, nil
+      local function considerMon(mon)
+        if type(mon) ~= "table" then return end
+        if mon.isEgg == true or (pokemonMod and type(pokemonMod.isEgg) == "function" and pokemonMod.isEgg(mon)) then
+          return
+        end
+        local nick = mon.nickname
+        if type(nick) ~= "string" or #nick < 2 then return end
+        local sp = mon.species or mon.speciesId
+        if not sp and pokemonMod and type(pokemonMod.speciesOf) == "function" then
+          local okS, res = pcall(pokemonMod.speciesOf, mon)
+          if okS then sp = res end
+        end
+        local speciesName = sp and type(namesTable) == "table" and namesTable[sp]
+        if type(speciesName) == "string" and speciesName:upper() == nick:upper() then
+          return
+        end
+        if nick:upper() == "EGG" then return end
+        if not seen then
+          nicks, seen = {}, {}
+        end
+        if not seen[nick] then
+          seen[nick] = true
+          nicks[#nicks + 1] = nick
+        end
+      end
+
+      local function considerParty(party)
+        if type(party) ~= "table" then return end
+        for i = 1, #party do
+          considerMon(party[i])
+        end
+      end
+
+      if runtimeMod then
+        local session = runtimeMod.session
+        if not session and type(runtimeMod.getSession) == "function" then
+          local okS, s = pcall(runtimeMod.getSession)
+          if okS and type(s) == "table" then session = s end
+        end
+        if type(session) == "table" then considerParty(session.party) end
+      end
+      if partyMod then
+        considerParty(partyMod._party)
+        if type(partyMod._session) == "table" then considerParty(partyMod._session.party) end
+      end
+      if battleMod and type(battleMod.getState) == "function" then
+        local okB, st = pcall(battleMod.getState)
+        if okB and type(st) == "table" then
+          considerParty(st.playerParty)
+          if type(st.player) == "table" then considerMon(st.player.mon or st.player.pokemon) end
+          if type(st.enemy) == "table" then considerMon(st.enemy.mon or st.enemy.pokemon) end
+          if type(st.battlers) == "table" then
+            for _, b in pairs(st.battlers) do
+              if type(b) == "table" then considerMon(b.mon or b.pokemon) end
+            end
+          end
+        end
+      end
+      return nicks
+    end
+
+    local cachedPlayer, cachedRival, cachedNickSig = false, false, false
+    local cachedList, cachedAliases, cachedHasAliases = {}, {}, false
+    local textCache, textCacheSize = {}, 0
+
+    local function clearTextCache()
+      textCache = {}
+      textCacheSize = 0
+    end
+
+    resetOmniCache = function()
+      cachedPlayer, cachedRival, cachedNickSig = false, false, false
+      clearTextCache()
+    end
+
+    local function getOmniProtection()
+      local p = type(getLivePlayerName) == "function" and getLivePlayerName() or nil
+      local r = type(getLiveRivalName) == "function" and getLiveRivalName() or nil
+      local nicks = collectCustomNicknames()
+      local nickSig = ""
+      if nicks then
+        table.sort(nicks)
+        nickSig = table.concat(nicks, "\31")
+      end
+      if p == cachedPlayer and r == cachedRival and nickSig == cachedNickSig then
+        return cachedList, cachedAliases, cachedHasAliases
+      end
+
+      cachedPlayer, cachedRival, cachedNickSig = p, r, nickSig
+      clearTextCache()
+
+      local set, aliases = {}, {}
+      if type(getProtectedNames) == "function" then
+        local baseList, _, baseAliases = getProtectedNames(nil)
+        for _, name in ipairs(baseList) do set[name] = true end
+        for from, to in pairs(baseAliases) do aliases[from] = to end
+      end
+      if nicks then
+        for _, nick in ipairs(nicks) do
+          if nick:find("[A-Z]") or nick:find(E_ACUTE_UPPER, 1, true) then
+            set[nick] = true
+          end
+          local upperNick = nick:upper()
+          if nick ~= upperNick and (upperNick:find("[A-Z]") or upperNick:find(E_ACUTE_UPPER, 1, true)) then
+            set[upperNick] = true
+            aliases[upperNick] = nick
+          end
+        end
+      end
+
+      local list = {}
+      for name in pairs(set) do list[#list + 1] = name end
+      table.sort(list, function(x, y)
+        if #x ~= #y then return #x > #y end
+        return x < y
+      end)
+      cachedList = list
+      cachedAliases = aliases
+      cachedHasAliases = next(aliases) ~= nil
+      return cachedList, cachedAliases, cachedHasAliases
+    end
+
+    local function omniTransform(cleaned)
+      if type(cleaned) ~= "string" or cleaned == "" then return cleaned end
+      if state.bypassDepth > 0 then return cleaned end
+      if state.bypassText ~= nil and cleaned == state.bypassText then return cleaned end
+      if isNamingOpen() then return cleaned end
+
+      local list, aliases, hasAliases = getOmniProtection()
+      local hit = textCache[cleaned]
+      if hit ~= nil then return hit end
+
+      local work = collapseDuplicatePokemon(cleaned)
+      local out = work
+      if needsDecap(work, hasAliases) then
+        out = decapText(work, list, aliases, OMNI_KEEP) or work
+      end
+
+      if textCacheSize >= 512 then clearTextCache() end
+      textCache[cleaned] = out
+      textCacheSize = textCacheSize + 1
+      return out
+    end
+
+    rawset(Layout, "__decapOmniFn", omniTransform)
+    rawset(Layout, "__decapOmniReset", resetOmniCache)
+
+    local hooked = false
+    if not rawget(Layout, "__decapOmni") then
+      local origCleanText = Layout.cleanText
+      Layout.cleanText = function(text, ...)
+        local cleaned = origCleanText(text, ...)
+        local fn = rawget(Layout, "__decapOmniFn")
+        if type(fn) == "function" then
+          return fn(cleaned)
+        end
+        return cleaned
+      end
+      rawset(Layout, "__decapOmni", true)
+      hooked = true
+    end
+
+    if type(Layout.drawButtonHint) == "function" and not rawget(Layout, "__decapOmniHint") then
+      local origDrawButtonHint = Layout.drawButtonHint
+      Layout.drawButtonHint = function(x, y, keyText, labelText, opts)
+        local prev = state.bypassText
+        state.bypassText = keyText ~= nil and tostring(keyText) or nil
+        local okH, a, b, c, d = pcall(origDrawButtonHint, x, y, keyText, labelText, opts)
+        state.bypassText = prev
+        if not okH then error(a, 0) end
+        return a, b, c, d
+      end
+      rawset(Layout, "__decapOmniHint", true)
+      hooked = true
+    end
+
+    local Widgets = exports.Widgets
+    if type(Widgets) == "table" and type(Widgets.drawStatusBadge) == "function"
+        and not rawget(Widgets, "__decapOmni") then
+      local origDrawStatusBadge = Widgets.drawStatusBadge
+      Widgets.drawStatusBadge = function(...)
+        state.bypassDepth = state.bypassDepth + 1
+        local okW, a, b, c, d = pcall(origDrawStatusBadge, ...)
+        state.bypassDepth = state.bypassDepth - 1
+        if not okW then error(a, 0) end
+        return a, b, c, d
+      end
+      rawset(Widgets, "__decapOmni", true)
+      hooked = true
+    end
+
+    local MoveDatabase = exports.MoveDatabase
+    if type(MoveDatabase) == "table" and type(MoveDatabase.getDescription) == "function"
+        and not rawget(MoveDatabase, "__decapOmni") then
+      local origMoveDesc = MoveDatabase.getDescription
+      MoveDatabase.getDescription = function(...)
+        return decapString(origMoveDesc(...), OMNI_KEEP)
+      end
+      rawset(MoveDatabase, "__decapOmni", true)
+      hooked = true
+    end
+
+    local ItemDatabase = exports.ItemDatabase
+    if type(ItemDatabase) == "table" and type(ItemDatabase.getDescription) == "function"
+        and not rawget(ItemDatabase, "__decapOmni") then
+      local origItemDesc = ItemDatabase.getDescription
+      ItemDatabase.getDescription = function(...)
+        return decapString(origItemDesc(...), OMNI_KEEP)
+      end
+      rawset(ItemDatabase, "__decapOmni", true)
+      hooked = true
+    end
+
+    if hooked then
+      mod.log:info("decap_names: optional omni_ui support hooked")
+    end
+  end
+
   mod.events:on("game.ready", function()
     local okTextReady, errTextReady = pcall(textPass)
     if not okTextReady then
@@ -1244,11 +1562,14 @@ return function(mod)
     if not ok then
       displayText = "display pass failed: " .. tostring(P)
       mod.log:warn("decap_names: %s", displayText)
-      return
+      P = nil
     end
+    local okOmni, errOmni = pcall(omniPass)
+    if not okOmni then mod.log:warn("decap_names: omni_ui hook failed: %s", tostring(errOmni)) end
     mod.log:info("decap_names: %s; %s", displayText, dialogueText)
     if P and type(P.onReload) == "function" then
       P.onReload(function()
+        if type(resetOmniCache) == "function" then pcall(resetOmniCache) end
         local okReload, errReload = pcall(displayPass)
         if not okReload then mod.log:warn("decap_names: display reload failed: %s", tostring(errReload)) end
       end, "decap_names")
