@@ -24,8 +24,8 @@ local WORD_EXACT = {
   ["POKéGEAR"] = "PokéGear",
 }
 
-local E_ACUTE = "é" -- UTF-8 bytes 195, 169
-local E_ACUTE_UPPER = "É" -- UTF-8 bytes 195, 137
+local E_ACUTE = "é"
+local E_ACUTE_UPPER = "É"
 local MARK_OPEN, MARK_CLOSE = string.char(1), string.char(2)
 local MARK_OPEN_BYTE, MARK_CLOSE_BYTE = 1, 2
 
@@ -63,9 +63,6 @@ local function isWordByte(b)
       or b == 39                -- '
 end
 
--- Byte-accurate word scanner: matches ASCII [A-Za-z0-9'] and the exact 2-byte
--- UTF-8 sequence "é", skipping MARK_OPEN..MARK_CLOSE sentinel spans so other
--- multi-byte UTF-8 glyphs (e.g. "×") are never split.
 local function mapWords(s, fn)
   local n = #s
   local out = {}
@@ -510,7 +507,6 @@ return function(mod)
       return decapText(label, list, aliases)
     end
 
-    -- Expose current helpers on T so hot-reloaded chunks keep existing wrappers live.
     rawset(T, "__decapLabel", labelDecap)
     rawset(T, "__decapProtected", protectedNames)
     rawset(T, "__decapIsPreset", isPreset)
