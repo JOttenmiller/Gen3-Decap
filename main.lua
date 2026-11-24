@@ -967,34 +967,50 @@ return function(mod)
     local words = scanWords(work)
     local out, last, changed, i = {}, 1, false, 1
     while i <= #words do
-      local hit
-      if words[i].caps then
-        local maxJ = i
-        while maxJ < #words and maxJ - i < 4 and words[maxJ + 1].caps
-            and JOINS[work:sub(words[maxJ].b + 1, words[maxJ + 1].a - 1)] do
-          maxJ = maxJ + 1
-        end
-        for j = maxJ, i, -1 do
-          local text = work:sub(words[i].a, words[j].b)
-          local rep = lookup(text)
-          if not rep and text:sub(-2) == "'S" and #text > 3 then
-            rep = lookup(text:sub(1, -3))
-            if rep then rep = rep .. "'s" end
-          end
-          if rep then
-            hit = { j = j, text = rep }
-            break
-          end
-        end
-      end
-      if hit then
-        out[#out + 1] = work:sub(last, words[i].a - 1)
-        out[#out + 1] = hit.text
-        last = words[hit.j].b + 1
-        changed = true
-        i = hit.j + 1
-      else
+      if not words[i].caps then
         i = i + 1
+      else
+        local runEnd = i
+        while runEnd < #words and words[runEnd + 1].caps
+            and JOINS[work:sub(words[runEnd].b + 1, words[runEnd + 1].a - 1)] do
+          runEnd = runEnd + 1
+        end
+        local tiles, p = {}, i
+        while p <= runEnd do
+          local hit
+          for j = math.min(runEnd, p + 4), p, -1 do
+            local text = work:sub(words[p].a, words[j].b)
+            local rep = lookup(text)
+            if not rep and text:sub(-2) == "'S" and #text > 3 then
+              rep = lookup(text:sub(1, -3))
+              if rep then rep = rep .. "'s" end
+            end
+            if rep then
+              hit = { p = p, j = j, text = rep }
+              break
+            end
+          end
+          if not hit then
+            local word = work:sub(words[p].a, words[p].b)
+            if isKeep(word) then
+              hit = { p = p, j = p, text = word }
+            else
+              tiles = nil
+              break
+            end
+          end
+          tiles[#tiles + 1] = hit
+          p = hit.j + 1
+        end
+        if tiles then
+          for _, t in ipairs(tiles) do
+            out[#out + 1] = work:sub(last, words[t.p].a - 1)
+            out[#out + 1] = t.text
+            last = words[t.j].b + 1
+          end
+          changed = true
+        end
+        i = runEnd + 1
       end
     end
     if not changed then return s end
@@ -1046,12 +1062,52 @@ return function(mod)
     end
   end
 
+  local engineText, engineTextSize = {}, 0
+
+  local function rememberEngineText(out, alt)
+    if out == alt then return end
+    if engineTextSize >= 2048 then engineText, engineTextSize = {}, 0 end
+    if engineText[out] == nil then engineTextSize = engineTextSize + 1 end
+    engineText[out] = alt
+  end
+
+  local function engineStringsPass()
+    local S = loadModule("src.core.Strings")
+    if not S or type(S.get) ~= "function" or type(S.lookup) ~= "function" or rawget(S, "__decapStrings") then return end
+    local originalGet = S.get
+    S.get = function(source, ...)
+      local out = originalGet(source, ...)
+      if type(out) == "string" and type(source) == "string" and needsDecap(source, false) then
+        local args = { n = select("#", ...), ... }
+        local unpackArgs = table.unpack or unpack
+        pcall(function()
+          local argc = args.n
+          local english, template = source, decapText(source)
+          if not template then return end
+          local alt = template
+          if argc > 0 and source:find("%%[^%%]") then
+            local okE, e = pcall(string.format, source, unpackArgs(args, 1, argc))
+            local okF, f = pcall(string.format, template, unpackArgs(args, 1, argc))
+            if not (okE and okF) then return end
+            english, alt = e, f
+          end
+          if out ~= english then return end
+          rememberEngineText(out, alt)
+        end)
+      end
+      return out
+    end
+    rawset(S, "__decapStrings", true)
+  end
+
   local function fontText(text)
     if type(text) ~= "string" or text == "" then return text end
     if not (text:find("[A-Z][A-Z]") or text:find(E_ACUTE_UPPER, 1, true) or text:find("[A-Z]\195\169")) then
       return text
     end
     if isNamingOpen() then return text end
+    local engine = engineText[text]
+    if engine then return engine end
     refreshFontProtect()
     local hit = fontCache[text]
     if hit then return hit end
@@ -1866,6 +1922,8 @@ return function(mod)
       mod.log:warn("decap_names: %s", displayText)
       P = nil
     end
+    local okStrings, errStrings = pcall(engineStringsPass)
+    if not okStrings then mod.log:warn("decap_names: engine text hook failed: %s", tostring(errStrings)) end
     local okQuest, errQuest = pcall(questLogPass)
     if not okQuest then mod.log:warn("decap_names: quest log hook failed: %s", tostring(errQuest)) end
     local okOmni, errOmni = pcall(omniPass)
