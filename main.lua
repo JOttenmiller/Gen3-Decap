@@ -753,6 +753,328 @@ return function(mod)
     return ok and type(module) == "table" and module or nil
   end
 
+  local namingMod, namingTried = nil, false
+  local runtimeMod, runtimeTried = nil, false
+  local partyMod, partyTried = nil, false
+  local battleMod, battleTried = nil, false
+  local pokemonMod, pokemonTried = nil, false
+
+  local function isNamingOpen()
+    if not namingTried then
+      namingTried = true
+      namingMod = loadModule("src.ui.game3.naming")
+    end
+    if not namingMod then return false end
+    if namingMod.openFlag == true then return true end
+    if type(namingMod.isOpen) == "function" then
+      local okOpen, open = pcall(namingMod.isOpen)
+      if okOpen and open == true then return true end
+    end
+    return false
+  end
+
+  local function collectCustomNicknames()
+    if not pokemonTried then
+      pokemonTried = true
+      pokemonMod = loadModule("src.core.game3.pokemon")
+    end
+    if not runtimeTried then
+      runtimeTried = true
+      runtimeMod = loadModule("src.core.game3.runtime")
+    end
+    if not partyTried then
+      partyTried = true
+      partyMod = loadModule("src.ui.game3.party_menu")
+    end
+    if not battleTried then
+      battleTried = true
+      battleMod = loadModule("src.core.game3.battle")
+    end
+
+    local namesTable = pokemonMod and rawget(pokemonMod, "_names")
+    local nicks, seen = nil, nil
+    local function considerMon(mon)
+      if type(mon) ~= "table" then return end
+      if mon.isEgg == true or (pokemonMod and type(pokemonMod.isEgg) == "function" and pokemonMod.isEgg(mon)) then
+        return
+      end
+      local nick = mon.nickname
+      if type(nick) ~= "string" or #nick < 2 then return end
+      local sp = mon.species or mon.speciesId
+      if not sp and pokemonMod and type(pokemonMod.speciesOf) == "function" then
+        local okS, res = pcall(pokemonMod.speciesOf, mon)
+        if okS then sp = res end
+      end
+      local speciesName = sp and type(namesTable) == "table" and namesTable[sp]
+      if type(speciesName) == "string" and speciesName:upper() == nick:upper() then
+        return
+      end
+      if nick:upper() == "EGG" then return end
+      if not seen then
+        nicks, seen = {}, {}
+      end
+      if not seen[nick] then
+        seen[nick] = true
+        nicks[#nicks + 1] = nick
+      end
+    end
+
+    local function considerParty(party)
+      if type(party) ~= "table" then return end
+      for i = 1, #party do
+        considerMon(party[i])
+      end
+    end
+
+    if runtimeMod then
+      local session = runtimeMod.session
+      if not session and type(runtimeMod.getSession) == "function" then
+        local okS, s = pcall(runtimeMod.getSession)
+        if okS and type(s) == "table" then session = s end
+      end
+      if type(session) == "table" then considerParty(session.party) end
+    end
+    if partyMod then
+      considerParty(partyMod._party)
+      if type(partyMod._session) == "table" then considerParty(partyMod._session.party) end
+    end
+    if battleMod and type(battleMod.getState) == "function" then
+      local okB, st = pcall(battleMod.getState)
+      if okB and type(st) == "table" then
+        considerParty(st.playerParty)
+        if type(st.player) == "table" then considerMon(st.player.mon or st.player.pokemon) end
+        if type(st.enemy) == "table" then considerMon(st.enemy.mon or st.enemy.pokemon) end
+        if type(st.battlers) == "table" then
+          for _, b in pairs(st.battlers) do
+            if type(b) == "table" then considerMon(b.mon or b.pokemon) end
+          end
+        end
+      end
+    end
+    return nicks
+  end
+
+  local NAME_FIELDS = { "name", "className", "displayName", "title" }
+
+  local function upperKey(s)
+    local key = s:upper()
+    if key:find(E_ACUTE_UPPER, 1, true) then key = key:gsub(E_ACUTE_UPPER, E_ACUTE) end
+    return key
+  end
+
+  local function learnName(dict, value)
+    if type(value) ~= "string" or #value < 3 or not value:find("[A-Za-z]") then return end
+    if value:find("[{}<>%%\n]") then return end
+    local key = upperKey(value)
+    if dict[key] then return end
+    local proper = hasLowerAscii(value) and value or titlecase(value)
+    if proper and proper ~= key then dict[key] = proper end
+  end
+
+  local function learnRegistries(dict)
+    local content = mod.content
+    if type(content) ~= "table" then return end
+    local okP, iter, state, init = pcall(pairs, content)
+    if not okP then return end
+    for _, handle in iter, state, init do
+      if type(handle) == "table" and type(handle.each) == "function" then
+        pcall(function()
+          for _, record in handle:each() do
+            if type(record) == "table" then
+              for _, field in ipairs(NAME_FIELDS) do learnName(dict, record[field]) end
+            end
+          end
+        end)
+      end
+    end
+  end
+
+  local function learnPlaces(dict)
+    local MS = loadModule("src.import.gba.map_sections_extract")
+    if MS then
+      pcall(MS.ensureGenerated)
+      if type(MS.SECTIONS) == "table" then
+        for _, sec in pairs(MS.SECTIONS) do
+          if type(sec) == "table" then learnName(dict, sec.name) end
+        end
+      end
+    end
+    local Mapsec = loadModule("src.ui.game3.rse.mapsec")
+    if Mapsec and type(Mapsec.count) == "function" and type(Mapsec.name) == "function" then
+      pcall(function()
+        for sec = 0, (Mapsec.count() or 0) - 1 do
+          local okN, name = pcall(Mapsec.name, sec)
+          if okN then learnName(dict, name) end
+        end
+      end)
+    end
+  end
+
+  local function isCapsWord(w)
+    return not w:find("[a-z]") and (w:find("[A-Z]") ~= nil or w:find(E_ACUTE_UPPER, 1, true) ~= nil)
+  end
+
+  local function isNameByte(s, i)
+    local b = s:byte(i)
+    if not b then return 0 end
+    if isWordByte(b) then return 1 end
+    if b == 195 then
+      local c = s:byte(i + 1)
+      if c == 169 or c == 137 then return 2 end
+    end
+    return 0
+  end
+
+  local function scanWords(s)
+    local words, n, pos = {}, #s, 1
+    while pos <= n do
+      local b = s:byte(pos)
+      if b == MARK_OPEN_BYTE then
+        local c = s:find(MARK_CLOSE, pos + 1, true)
+        pos = c and (c + 1) or (n + 1)
+      elseif isNameByte(s, pos) > 0 then
+        local we = pos
+        while we <= n do
+          local step = isNameByte(s, we)
+          if step == 0 then break end
+          we = we + step
+        end
+        words[#words + 1] = { a = pos, b = we - 1, caps = isCapsWord(s:sub(pos, we - 1)) }
+        pos = we
+      else
+        pos = pos + 1
+      end
+    end
+    return words
+  end
+
+  local JOINS = { [" "] = true, ["."] = true, [". "] = true, ["-"] = true }
+
+  local function dictReplace(s, dict, protect)
+    local store = {}
+    local work = s
+    if work:find("[{}]") then
+      work = work:gsub("{[^{}]*}", function(token)
+        store[#store + 1] = token
+        return MARK_OPEN .. #store .. MARK_CLOSE
+      end)
+    end
+    local function lookup(text)
+      local key = upperKey(text)
+      if protect[key] then return nil end
+      return dict[key]
+    end
+    local words = scanWords(work)
+    local out, last, changed, i = {}, 1, false, 1
+    while i <= #words do
+      local hit
+      if words[i].caps then
+        local maxJ = i
+        while maxJ < #words and maxJ - i < 4 and words[maxJ + 1].caps
+            and JOINS[work:sub(words[maxJ].b + 1, words[maxJ + 1].a - 1)] do
+          maxJ = maxJ + 1
+        end
+        for j = maxJ, i, -1 do
+          local text = work:sub(words[i].a, words[j].b)
+          local rep = lookup(text)
+          if not rep and text:sub(-2) == "'S" and #text > 3 then
+            rep = lookup(text:sub(1, -3))
+            if rep then rep = rep .. "'s" end
+          end
+          if rep then
+            hit = { j = j, text = rep }
+            break
+          end
+        end
+      end
+      if hit then
+        out[#out + 1] = work:sub(last, words[i].a - 1)
+        out[#out + 1] = hit.text
+        last = words[hit.j].b + 1
+        changed = true
+        i = hit.j + 1
+      else
+        i = i + 1
+      end
+    end
+    if not changed then return s end
+    out[#out + 1] = work:sub(last)
+    local result = table.concat(out)
+    if #store > 0 then
+      result = result:gsub(MARK_OPEN .. "(%d+)" .. MARK_CLOSE, function(k) return store[tonumber(k)] end)
+    end
+    return result
+  end
+
+  local fontDict = {}
+  local fontCache, fontCacheSize, fontProtect, fontProtectSig, fontProtectAt = {}, 0, {}, nil, -1
+
+  local function clock()
+    local okC, t = pcall(os.clock)
+    return okC and t or 0
+  end
+
+  local function refreshFontProtect()
+    local now = clock()
+    if fontProtectSig and now - fontProtectAt < 0.25 then return end
+    fontProtectAt = now
+    local set, keys = {}, {}
+    local function add(name)
+      if type(name) == "string" and name ~= "" then
+        local key = upperKey(name)
+        if not set[key] then
+          set[key] = true
+          keys[#keys + 1] = key
+        end
+      end
+    end
+    for _, getter in ipairs({ getLivePlayerName, getLiveRivalName }) do
+      if type(getter) == "function" then
+        local okG, name = pcall(getter)
+        if okG and not (type(isPresetName) == "function" and isPresetName(name)) then add(name) end
+      end
+    end
+    local okN, nicks = pcall(collectCustomNicknames)
+    if okN and nicks then
+      for _, nick in ipairs(nicks) do add(nick) end
+    end
+    table.sort(keys)
+    local sig = table.concat(keys, "\31")
+    if sig ~= fontProtectSig then
+      fontProtectSig, fontProtect = sig, set
+      fontCache, fontCacheSize = {}, 0
+    end
+  end
+
+  local function fontText(text)
+    if type(text) ~= "string" or text == "" then return text end
+    if not (text:find("[A-Z][A-Z]") or text:find(E_ACUTE_UPPER, 1, true) or text:find("[A-Z]\195\169")) then
+      return text
+    end
+    if isNamingOpen() then return text end
+    refreshFontProtect()
+    local hit = fontCache[text]
+    if hit then return hit end
+    local okR, out = pcall(dictReplace, text, fontDict, fontProtect)
+    if not okR then out = text end
+    if fontCacheSize >= 1024 then fontCache, fontCacheSize = {}, 0 end
+    fontCache[text] = out
+    fontCacheSize = fontCacheSize + 1
+    return out
+  end
+
+  local function rebuildFontDict(defaultNames)
+    local dict = {}
+    for key, value in pairs(defaultNames) do dict[upperKey(key)] = value end
+    pcall(learnRegistries, dict)
+    pcall(learnPlaces, dict)
+    for key, value in pairs(dict) do
+      if defaultNames[key] == nil then defaultNames[key] = value end
+    end
+    fontDict = dict
+    fontCache, fontCacheSize, fontProtectSig = {}, 0, nil
+  end
+
   local function decapRows(rows)
     if type(rows) ~= "table" then return rows end
     local list, _, aliases
@@ -1025,16 +1347,18 @@ return function(mod)
 
     local okF, FrlgFont = pcall(require, "src.ui.game3.frlg_font")
     if okF and type(FrlgFont) == "table" and type(FrlgFont.draw) == "function"
-        and not rawget(FrlgFont, "__decapDefaults") then
+        and not rawget(FrlgFont, "__decapFont") then
       local originalDraw = FrlgFont.draw
       FrlgFont.draw = function(text, ...)
-        if type(text) == "string" then
-          local replacement = defaultNames[text]
-          if replacement then text = replacement end
-        end
-        return originalDraw(text, ...)
+        return originalDraw(fontText(text), ...)
       end
-      rawset(FrlgFont, "__decapDefaults", true)
+      if type(FrlgFont.measure) == "function" then
+        local originalMeasure = FrlgFont.measure
+        FrlgFont.measure = function(text, ...)
+          return originalMeasure(fontText(text), ...)
+        end
+      end
+      rawset(FrlgFont, "__decapFont", true)
     end
 
     local battleState = sharedTable(P, "__decapBattleState")
@@ -1265,8 +1589,12 @@ return function(mod)
       end
     end
 
-    displayText = ("display pass: %d species, %d moves, %d abilities, %d items, %d berries renamed"):format(
-      species, moves, abilities, items, berries)
+    rebuildFontDict(defaultNames)
+    local known = 0
+    for _ in pairs(fontDict) do known = known + 1 end
+
+    displayText = ("display pass: %d species, %d moves, %d abilities, %d items, %d berries renamed, %d known names"):format(
+      species, moves, abilities, items, berries, known)
     return P
   end
 
@@ -1283,107 +1611,6 @@ return function(mod)
     if type(state) ~= "table" then
       state = { bypassDepth = 0, bypassText = nil }
       rawset(Layout, "__decapOmniState", state)
-    end
-
-    local namingMod, namingTried = nil, false
-    local runtimeMod, runtimeTried = nil, false
-    local partyMod, partyTried = nil, false
-    local battleMod, battleTried = nil, false
-    local pokemonMod, pokemonTried = nil, false
-
-    local function isNamingOpen()
-      if not namingTried then
-        namingTried = true
-        namingMod = loadModule("src.ui.game3.naming")
-      end
-      if not namingMod then return false end
-      if namingMod.openFlag == true then return true end
-      if type(namingMod.isOpen) == "function" then
-        local okOpen, open = pcall(namingMod.isOpen)
-        if okOpen and open == true then return true end
-      end
-      return false
-    end
-
-    local function collectCustomNicknames()
-      if not pokemonTried then
-        pokemonTried = true
-        pokemonMod = loadModule("src.core.game3.pokemon")
-      end
-      if not runtimeTried then
-        runtimeTried = true
-        runtimeMod = loadModule("src.core.game3.runtime")
-      end
-      if not partyTried then
-        partyTried = true
-        partyMod = loadModule("src.ui.game3.party_menu")
-      end
-      if not battleTried then
-        battleTried = true
-        battleMod = loadModule("src.core.game3.battle")
-      end
-
-      local namesTable = pokemonMod and rawget(pokemonMod, "_names")
-      local nicks, seen = nil, nil
-      local function considerMon(mon)
-        if type(mon) ~= "table" then return end
-        if mon.isEgg == true or (pokemonMod and type(pokemonMod.isEgg) == "function" and pokemonMod.isEgg(mon)) then
-          return
-        end
-        local nick = mon.nickname
-        if type(nick) ~= "string" or #nick < 2 then return end
-        local sp = mon.species or mon.speciesId
-        if not sp and pokemonMod and type(pokemonMod.speciesOf) == "function" then
-          local okS, res = pcall(pokemonMod.speciesOf, mon)
-          if okS then sp = res end
-        end
-        local speciesName = sp and type(namesTable) == "table" and namesTable[sp]
-        if type(speciesName) == "string" and speciesName:upper() == nick:upper() then
-          return
-        end
-        if nick:upper() == "EGG" then return end
-        if not seen then
-          nicks, seen = {}, {}
-        end
-        if not seen[nick] then
-          seen[nick] = true
-          nicks[#nicks + 1] = nick
-        end
-      end
-
-      local function considerParty(party)
-        if type(party) ~= "table" then return end
-        for i = 1, #party do
-          considerMon(party[i])
-        end
-      end
-
-      if runtimeMod then
-        local session = runtimeMod.session
-        if not session and type(runtimeMod.getSession) == "function" then
-          local okS, s = pcall(runtimeMod.getSession)
-          if okS and type(s) == "table" then session = s end
-        end
-        if type(session) == "table" then considerParty(session.party) end
-      end
-      if partyMod then
-        considerParty(partyMod._party)
-        if type(partyMod._session) == "table" then considerParty(partyMod._session.party) end
-      end
-      if battleMod and type(battleMod.getState) == "function" then
-        local okB, st = pcall(battleMod.getState)
-        if okB and type(st) == "table" then
-          considerParty(st.playerParty)
-          if type(st.player) == "table" then considerMon(st.player.mon or st.player.pokemon) end
-          if type(st.enemy) == "table" then considerMon(st.enemy.mon or st.enemy.pokemon) end
-          if type(st.battlers) == "table" then
-            for _, b in pairs(st.battlers) do
-              if type(b) == "table" then considerMon(b.mon or b.pokemon) end
-            end
-          end
-        end
-      end
-      return nicks
     end
 
     local cachedPlayer, cachedRival, cachedNickSig = false, false, false
@@ -1543,6 +1770,81 @@ return function(mod)
     end
   end
 
+  local questHooked = false
+  local function questLogPass()
+    if not DIALOGUE or questHooked then return end
+    local UI = loadModule("src.ui.game3.quest_log")
+    if not (UI and type(UI.text) == "function") then return end
+    questHooked = true
+    if rawget(UI, "__decapQuest") then return end
+
+    local function defaults()
+      local P = loadModule("src.core.game3.pokemon")
+      return P and rawget(P, "__decapDefaultNames") or {}
+    end
+
+    local function presetCheck(name)
+      return type(isPresetName) == "function" and isPresetName(name)
+    end
+
+    local function fixedName(name)
+      if type(name) ~= "string" or name == "" then return name end
+      if presetCheck(name) then return titlecase(name) or name end
+      return name
+    end
+
+    local function questArg(v, session)
+      if type(v) ~= "string" or v == "" or hasLowerAscii(v) then return v end
+      local upper = v:upper()
+      for _, field in ipairs({ "name", "rivalName" }) do
+        local own = session[field]
+        if type(own) == "string" and own ~= "" and own:upper() == upper then
+          return fixedName(own)
+        end
+      end
+      local d = defaults()[v] or defaults()[upperKey(v)]
+      if d then return d end
+      if upper == "TRAINER" or v:match("^BOX ?%d+$") then
+        return titlecase(v) or v
+      end
+      return v
+    end
+
+    local decappedPack
+    local function decapPack()
+      local pack = rawget(UI, "pack")
+      if pack == decappedPack or type(pack) ~= "table" or type(pack.text) ~= "table" then return end
+      for key, text in pairs(pack.text) do
+        if type(text) == "string" then
+          local new = decapText(text)
+          if new then pack.text[key] = new end
+        end
+      end
+      decappedPack = pack
+    end
+
+    local original = UI.text
+    UI.text = function(key, args, session)
+      pcall(decapPack)
+      local real = type(session) == "table" and session or {}
+      local fixedArgs = args
+      if type(args) == "table" then
+        fixedArgs = {}
+        for k, v in pairs(args) do
+          local okA, new = pcall(questArg, v, real)
+          fixedArgs[k] = okA and new or v
+        end
+      end
+      local view = setmetatable({
+        name = fixedName(real.name or "RED"),
+        rivalName = fixedName(real.rivalName or "BLUE"),
+      }, { __index = real })
+      return original(key, fixedArgs, view)
+    end
+    rawset(UI, "__decapQuest", true)
+    mod.log:info("decap_names: quest log hooked")
+  end
+
   mod.events:on("game.ready", function()
     local okTextReady, errTextReady = pcall(textPass)
     if not okTextReady then
@@ -1564,6 +1866,8 @@ return function(mod)
       mod.log:warn("decap_names: %s", displayText)
       P = nil
     end
+    local okQuest, errQuest = pcall(questLogPass)
+    if not okQuest then mod.log:warn("decap_names: quest log hook failed: %s", tostring(errQuest)) end
     local okOmni, errOmni = pcall(omniPass)
     if not okOmni then mod.log:warn("decap_names: omni_ui hook failed: %s", tostring(errOmni)) end
     mod.log:info("decap_names: %s; %s", displayText, dialogueText)
