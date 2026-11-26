@@ -123,7 +123,7 @@ local function mapWords(s, fn)
 end
 
 local function isKeep(token, extraKeep)
-  return KEEP[token] == true or (extraKeep ~= nil and extraKeep[token] == true)
+  return KEEP[token] == true or (type(extraKeep) == "table" and extraKeep[token] == true)
 end
 
 local function normalizeWord(word, extraKeep)
@@ -258,8 +258,9 @@ local function decapText(s, protected, aliases, extraKeep)
   if exact then
     return exact ~= s and exact or nil
   end
-  local result = mapWords(source, extraKeep and function(word)
-    return normalizeWord(word, extraKeep)
+  local keepTable = type(extraKeep) == "table" and extraKeep or nil
+  local result = mapWords(source, keepTable and function(word)
+    return normalizeWord(word, keepTable)
   end or normalizeWord)
   if #store > 0 then
     result = result:gsub(MARK_OPEN .. "(%d+)" .. MARK_CLOSE, function(i)
@@ -273,6 +274,11 @@ end
 local function decapString(value, extraKeep)
   if type(value) ~= "string" then return value end
   return decapText(value, nil, nil, extraKeep) or value
+end
+
+local function decapFirst(extraKeep, ...)
+  if select("#", ...) == 0 then return end
+  return decapString((...), extraKeep), select(2, ...)
 end
 
 local function collapseDuplicatePokemon(s)
@@ -1511,7 +1517,7 @@ return function(mod)
       for _, fname in ipairs({ "moveDescription", "abilityDescription", "contestEffectDescription", "contestCategoryName" }) do
         local fn = SummaryData[fname]
         if type(fn) == "function" then
-          SummaryData[fname] = function(...) return decapString(fn(...)) end
+          SummaryData[fname] = function(...) return decapFirst(nil, fn(...)) end
         end
       end
       rawset(SummaryData, "__decapDescriptions", true)
@@ -1591,7 +1597,7 @@ return function(mod)
       if type(I.description) == "function" and not rawget(I, "__decapItemDesc") then
         local original = I.description
         I.description = function(...)
-          return decapString(original(...))
+          return decapFirst(nil, original(...))
         end
         rawset(I, "__decapItemDesc", true)
       end
@@ -1804,7 +1810,7 @@ return function(mod)
         and not rawget(MoveDatabase, "__decapOmni") then
       local origMoveDesc = MoveDatabase.getDescription
       MoveDatabase.getDescription = function(...)
-        return decapString(origMoveDesc(...), OMNI_KEEP)
+        return decapFirst(OMNI_KEEP, origMoveDesc(...))
       end
       rawset(MoveDatabase, "__decapOmni", true)
       hooked = true
@@ -1815,7 +1821,7 @@ return function(mod)
         and not rawget(ItemDatabase, "__decapOmni") then
       local origItemDesc = ItemDatabase.getDescription
       ItemDatabase.getDescription = function(...)
-        return decapString(origItemDesc(...), OMNI_KEEP)
+        return decapFirst(OMNI_KEEP, origItemDesc(...))
       end
       rawset(ItemDatabase, "__decapOmni", true)
       hooked = true
